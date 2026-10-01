@@ -135,3 +135,7 @@ GitHub runs both on every push.
 To release, push a version tag (`git tag v0.3.0 && git push --tags`). A GitHub Action
 packages the addon with the [BigWigs packager](https://github.com/BigWigsMods/packager) and
 publishes the zip as a release.
+
+## License
+
+MIT; see [LICENSE](LICENSE).
