@@ -85,7 +85,7 @@ It has a search box; searching for "not taken" lists talents you haven't picked.
 
 ## Install
 
-1. Download `SpellScale-<version>.zip` from the [Releases](../../releases) page. The green
+1. Download the `SpellScale-v…-forever.zip` file from the [Releases](../../releases) page. The green
    "Code → Download ZIP" button gives you the source in a differently named folder, which the
    game won't load as-is.
 2. Unzip it into your Forever client's `Interface\AddOns\` folder, so you end up with
