@@ -1,0 +1,11 @@
+package-as: SpellScale
+
+move-folders:
+  SpellScale/SpellScale: SpellScale
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - tests

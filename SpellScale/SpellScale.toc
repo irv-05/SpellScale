@@ -1,0 +1,15 @@
+## Interface: 16001
+## Title: SpellScale
+## Notes: Learns how your spells scale with spell power, attack power and stats by watching your tooltips change, then shows the coefficients in your tooltips.
+## Author: Irvin
+## Version: @project-version@
+## SavedVariables: SpellScaleDB
+## SavedVariablesPerCharacter: SpellScaleCharDB
+## IconTexture: Interface\Icons\INV_Misc_Book_09
+## AddonCompartmentFunc: SpellScale_OnAddonCompartmentClick
+
+Parse.lua
+Solver.lua
+Core.lua
+Tooltip.lua
+UI.lua
