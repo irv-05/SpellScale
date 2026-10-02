@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.1
+
+Fixes found in a second replay of the paladin's readings, where some temporary effect raised
+every Holy number by 40% for a while.
+
+- A temporary boost (a buff or effect that comes and goes) is set aside instead of being read
+  as scaling, and the readings on both sides of it are kept. This fixes Seal of Command and
+  Seal of Righteousness reading as scaling with block value, after a boost started as a
+  shield went on and ended at a level-up.
+- Two-stat formulas follow the same rule as one-stat ones: a level-up can raise a spell's
+  base, never lower it.
+- Once readings have been set aside, a stat is only named after the number has changed at
+  least twice between level-ups (three times for two-stat formulas).
+- Removed the tick-rounding guess and the loose-rounding fallback. Forever's tooltips round
+  once, and the fallback let coincidences through.
+
 ## v0.3.0
 
 Fixes found by replaying a real paladin's and shaman's saved readings (`tools/replay.lua`).

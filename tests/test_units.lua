@@ -64,15 +64,6 @@ local function points(list)
 	return out
 end
 
--- A DoT whose total is four rounded ticks: (30 + 0.25 * sp) / 4 per tick
-local dot = {}
-for i, sp in ipairs({ 0, 13, 29, 41, 58, 77, 90 }) do
-	dot[i] = { { sp = sp, fire = sp }, { 4 * floor((30 + 0.25 * sp) / 4) } }
-end
-local fit = Solver.FitTrack(points(dot), 1)[1]
-T.eq(fit.kind, "linear", "tick-rounded total still fits")
-T.near(fit.terms[1].b, 0.25, fit.err + 1e-9, "tick-rounded coefficient")
-
 -- Two stats that have only ever moved together can't be told apart
 fit = Solver.FitTrack(points({
 	{ { sp = 0, int = 20 }, { 50 } },
@@ -146,14 +137,36 @@ T.eq(fit.kind == "linear" and #fit.terms == 1 and fit.terms[1].key, "sp", "Light
 T.ok(fit.levelSteps, "with a base that rises with level")
 T.ok(fit.lo >= 0.3 and fit.hi <= 0.7, string.format("and a sane coefficient (%.2f-%.2f)", fit.lo, fit.hi))
 
+-- A paladin's Seal of Command judgement while some temporary effect boosted every Holy number
+-- by 40%. The boost began as a shield went on (block value 2 to 13) and ended at a level-up,
+-- which once read as "19% SP + 182% block value": the level-up "reset" the shield's effect.
+fit = Solver.FitTrack(real({
+	{ { sp = 16, heal = 16, ap = 190, rap = 16, wpn = 109.79, block = 2, lvl = 20, str = 67, agi = 35, sta = 87, int = 47, spi = 35 }, { 49 } },
+	{ { sp = 0, heal = 0, ap = 190, rap = 16, wpn = 109.79, block = 2, lvl = 20, str = 67, agi = 35, sta = 73, int = 38, spi = 35 }, { 46 } },
+	{ { sp = 16, heal = 16, ap = 165, rap = 3, wpn = 68.64, block = 2, lvl = 20, str = 61, agi = 31, sta = 60, int = 42, spi = 43 }, { 49 } },
+	{ { sp = 16, heal = 16, ap = 259, rap = 3, wpn = 61.60, block = 13, lvl = 20, str = 66, agi = 31, sta = 60, int = 42, spi = 43 }, { 69 } },
+	{ { sp = 16, heal = 16, ap = 246, rap = 3, wpn = 46.96, block = 13, lvl = 20, str = 72, agi = 34, sta = 70, int = 46, spi = 41 }, { 69 } },
+	{ { sp = 11, heal = 11, ap = 200, rap = 3, wpn = 59.07, block = 13, lvl = 21, str = 77, agi = 35, sta = 71, int = 45, spi = 42 }, { 51 } },
+	{ { sp = 6, heal = 6, ap = 200, rap = 3, wpn = 59.07, block = 13, lvl = 21, str = 77, agi = 35, sta = 67, int = 45, spi = 42 }, { 50 } },
+	{ { sp = 16, heal = 16, ap = 211, rap = 3, wpn = 60.64, block = 13, lvl = 21, str = 70, agi = 32, sta = 65, int = 43, spi = 38 }, { 52 } },
+	{ { sp = 16, heal = 16, ap = 192, rap = 3, wpn = 57.93, block = 13, lvl = 21, str = 73, agi = 35, sta = 71, int = 47, spi = 42 }, { 52 } },
+	{ { sp = 16, heal = 16, ap = 204, rap = 3, wpn = 59.64, block = 13, lvl = 21, str = 79, agi = 40, sta = 77, int = 52, spi = 48 }, { 52 } },
+	{ { sp = 16, heal = 16, ap = 190, rap = 3, wpn = 57.64, block = 13, lvl = 21, str = 72, agi = 37, sta = 70, int = 48, spi = 44 }, { 52 } },
+	{ { sp = 16, heal = 16, ap = 215, rap = 3, wpn = 61.21, block = 13, lvl = 21, str = 72, agi = 37, sta = 70, int = 48, spi = 44 }, { 52 } },
+}), 1)[1]
+T.eq(fit.kind == "linear" and #fit.terms == 1 and fit.terms[1].key, "sp", "a boost that ended at a level-up isn't read as block value")
+T.ok(fit.lo <= 0.2145 and fit.hi >= 0.2145, "Judgement of Command's 21.45% is inside the range")
+
 T.section("solver: random formulas")
 -- Each trial invents a spell: base + coefficient * stat, where many classic spells' base also
 -- grows with level up to a cap (as seen on a real shaman). Twelve readings follow random gear
--- swaps, level-ups (which raise the primary stats and attack power too) and sometimes a talent.
+-- swaps, level-ups (which raise the primary stats and attack power too), sometimes a talent,
+-- and sometimes a temporary boost to the number (as seen on a real paladin).
 math.randomseed(1234)
 local KEYS = { "sp", "heal", "ap", "rap", "str", "agi", "sta", "int", "spi" }
 local PRIMARY = { "str", "agi", "sta", "int", "spi" }
 local trials, wrongStat, outside, ambiguousAtEnd, missing = 2000, 0, 0, 0, 0
+local coincidentTrials, wrongCoincident = 0, 0
 for _ = 1, trials do
 	local key = KEYS[math.random(#KEYS)]
 	local b = math.random(5, 150) / 100
@@ -165,13 +178,23 @@ for _ = 1, trials do
 		return nearest and floor(x + 0.5) or floor(x)
 	end
 	local talentAt = math.random() < 0.3 and math.random(2, 9) or nil
+	-- A temporary effect multiplies the number for a few readings. Usually it comes and goes on
+	-- its own, with stats unchanged, and Core.Record starts afresh at "same stats, different
+	-- number". Adversarially, it toggles in the same instant as a gear swap or level-up.
+	local boostFrom = math.random() < 0.3 and math.random(2, 9) or nil
+	local boostTo = boostFrom and boostFrom + math.random(0, 2)
+	local boost = 1 + math.random(1, 5) / 10
+	local coincident = boostFrom and math.random() < 0.5
 	local cur = { sp = 0, heal = 0, ap = 50, rap = 40, str = 30, agi = 25, sta = 30, int = 35, spi = 40, lvl = 20 }
 	local history = {}
 	for step = 1, 12 do
+		local toggled = boostFrom and not coincident and (step == boostFrom or step == boostTo + 1)
 		if step == talentAt then
 			-- Talents are picked on their own, so the numbers change while the stats don't.
 			-- Core.Record wipes a description's readings when that happens; do the same here.
 			a, b = a * 1.1, b * 1.1
+			history = {}
+		elseif toggled then
 			history = {}
 		elseif step > 1 and math.random() < 0.25 then
 			cur.lvl = cur.lvl + 1
@@ -193,7 +216,11 @@ for _ = 1, trials do
 		s.fire, s.holy, s.nature, s.frost, s.shadow, s.arcane = s.sp, s.sp, s.sp, s.sp, s.sp, s.sp
 		s.spx = s.sp + s.heal / 3
 		local base = a + perLevel * (math.min(s.lvl, cap) - 20)
-		history[#history + 1] = { s, { rounder(base + b * s[key]) } }
+		local boosted = boostFrom and step >= boostFrom and step <= boostTo and step < 12
+		history[#history + 1] = { s, { rounder((base + b * s[key]) * (boosted and boost or 1)) } }
+	end
+	if coincident then
+		coincidentTrials = coincidentTrials + 1
 	end
 	local pts, lo, hi = {}, {}, {}
 	local identifiable = false
@@ -212,13 +239,21 @@ for _ = 1, trials do
 		end
 		if named[key] then
 			if #fit.terms == 1 and math.abs(named[key].b - b) > fit.err + 1e-9 then
-				outside = outside + 1
+				if coincident then
+					wrongCoincident = wrongCoincident + 1
+				else
+					outside = outside + 1
+				end
 			end
 		elseif not fit.rivals then
 			-- Naming some other stat outright is always wrong. Naming level outright is only
 			-- wrong if the stat visibly moved the number between level-ups.
 			if fit.terms[1].key ~= "lvl" or identifiable then
-				wrongStat = wrongStat + 1
+				if coincident then
+					wrongCoincident = wrongCoincident + 1
+				else
+					wrongStat = wrongStat + 1
+				end
 			end
 		end
 		if fit.rivals then
@@ -233,7 +268,11 @@ for _ = 1, trials do
 				end
 			end
 			if identifiable and not candidates[key] then
-				missing = missing + 1
+				if coincident then
+					wrongCoincident = wrongCoincident + 1
+				else
+					missing = missing + 1
+				end
 			end
 		end
 	end
@@ -242,5 +281,9 @@ T.eq(wrongStat, 0, "never confidently names the wrong stat")
 T.eq(outside, 0, "the true coefficient is always inside the reported uncertainty")
 T.eq(missing, 0, "when unsure and the data could show it, the true stat is among the candidates")
 print(format("    %d of %d still ambiguous at the end", ambiguousAtEnd, trials))
+-- When a boost starts or ends in the very instant some stat moves, the readings can genuinely
+-- point at that stat; nothing short of knowing about the boost tells them apart.
+print(format("    boosts toggling exactly with a gear swap: %d wrong of %d", wrongCoincident, coincidentTrials))
+T.ok(wrongCoincident <= coincidentTrials / 100, "and even then it's rarely fooled (at most 1%)")
 
 T.done()

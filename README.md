@@ -108,8 +108,10 @@ keeps it.
 
 - It learns what the tooltip says. If a tooltip doesn't update with your stats (as with a beta
   bug on Flametongue Weapon), the addon will report that spell as not scaling.
-- Coefficients include your talents. If a talent changes a spell's numbers without changing
-  your stats, that spell starts learning again.
+- Coefficients include your talents. If a talent or a buff changes a spell's numbers without
+  changing your stats, that spell starts learning again. A boost that comes and goes is set
+  aside, but one that starts or ends in the very instant your stats change can occasionally
+  be mistaken for scaling.
 - Nothing is read in combat, because stats are hidden from addons there.
 - Number parsing assumes an English client (`1,234` and `1.5`).
 
@@ -145,7 +147,7 @@ lua5.1 tests/test_e2e.lua
 `test_e2e.lua` plays a session against the fake client: gear swaps, buffs, a level-up, a
 talent change, combat and a talent tree. It then checks the formulas the addon learned.
 `test_units.lua` covers tooltip-text parsing, readings from real play that once fooled the
-solver, and 2000 random formulas with gear swaps, level-ups and talents.
+solver, and 2000 random formulas with gear swaps, level-ups, talents and temporary boosts.
 GitHub runs both on every push.
 
 To release, push a version tag (`git tag v0.3.0 && git push --tags`). A GitHub Action

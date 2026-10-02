@@ -43,10 +43,12 @@ for _, stat in ipairs(STATS) do
 end
 
 -- Two readings of one formula, each rounded to the display step, differ from the true difference
--- by less than one step. Looser bounds are a fallback for formulas rounded in more than one place.
-local SLACK_TIERS = { 0.999, 2.999, 5.999 }
+-- by less than one step.
+local SLACK = 0.999
 local MIN_RANGE = 1 -- a stat has to move at least this much to count as tested
-local STRICT_MIN_POINTS = 3 -- an exact fit has to cover this many readings to beat a loose one
+local CUT_MIN_CHANGES = 2 -- once history is cut, the number must have changed this often since
+local MAX_STRETCH = 3 -- longest run of readings a temporary effect may be set aside for
+local PAIR_MIN_CHANGES = 3 -- two coefficients can match any two changes; a third tests them
 local PAIR_MIN_POINTS = 5 -- two-stat models need spare readings to be falsifiable
 local PAIR_TOL = 0.75 -- worst least-squares residual a two-stat model may leave, in display steps
 local COLLINEAR = 1e-3 -- skip stat pairs that have moved in near-lockstep
@@ -188,6 +190,20 @@ local function FitPlane(x1, x2, vs, first, last, levels)
 		local base = (g.v - b1 * g.x1 - b2 * g.x2) / g.n
 		worst = max(worst, abs(base + b1 * x1[k] + b2 * x2[k] - vs[k]))
 	end
+	-- As in the one-stat fit, a level-up may raise the base but never lower it. Without this,
+	-- a temporary boost that ended at a level-up looks like the level-up "resetting" it.
+	local order = {}
+	for level in pairs(groups) do
+		order[#order + 1] = level
+	end
+	table.sort(order)
+	for i = 2, #order do
+		local lower, higher = groups[order[i - 1]], groups[order[i]]
+		local drop = (lower.v - b1 * lower.x1 - b2 * lower.x2) / lower.n - (higher.v - b1 * higher.x1 - b2 * higher.x2) / higher.n
+		if drop > 2 * worst + 1 then
+			return nil
+		end
+	end
 	local g = groups[levels and levels[last] or 0]
 	return (g.v - b1 * g.x1 - b2 * g.x2) / g.n, b1, b2, worst, min(r1, r2), count
 end
@@ -292,18 +308,23 @@ local function PairFit(cols, vs, first, last, tolerance, levels)
 	return best
 end
 
--- Explains readings [first, last] of one number, or returns nil if nothing does. The strict pass
--- tries exact rounding with one stat, then two; the loose pass allows tick-built totals.
-local function FitWindow(cols, vs, first, last, prefer, step, strict)
+-- Explains readings [first, last] of one number, or returns nil if nothing does. cut says the
+-- readings before first were set aside; then a single change in the number isn't enough to
+-- name a stat, since that change may be the very one that made the cut necessary.
+local function FitWindow(cols, vs, first, last, prefer, step, cut, singleOnly)
 	local levels = Range(cols.lvl, first, last) >= 1 and cols.lvl or nil
-	local constant = true
+	-- Changes at a level-up can always be put down to the base growing, so only changes
+	-- between level-ups count as evidence about stats.
+	local changes, evidence = 0, 0
 	for k = first + 1, last do
-		if vs[k] ~= vs[first] then
-			constant = false
-			break
+		if vs[k] ~= vs[k - 1] then
+			changes = changes + 1
+			if not levels or levels[k] == levels[k - 1] then
+				evidence = evidence + 1
+			end
 		end
 	end
-	if constant then
+	if changes == 0 then
 		local tested
 		for _, stat in ipairs(STATS) do
 			local range = Range(cols[stat.key], first, last)
@@ -317,21 +338,14 @@ local function FitWindow(cols, vs, first, last, prefer, step, strict)
 		end
 		return { kind = "unknown" }
 	end
+	if cut and evidence < CUT_MIN_CHANGES then
+		return nil
+	end
 
 	local n = last - first + 1
-	local fit
-	if strict then
-		fit = SingleFit(cols, vs, first, last, prefer, SLACK_TIERS[1] * step, levels)
-		if not fit and n >= PAIR_MIN_POINTS then
-			fit = PairFit(cols, vs, first, last, PAIR_TOL * step, levels)
-		end
-	else
-		for tier = 2, #SLACK_TIERS do
-			fit = SingleFit(cols, vs, first, last, prefer, SLACK_TIERS[tier] * step, levels)
-			if fit then
-				break
-			end
-		end
+	local fit = SingleFit(cols, vs, first, last, prefer, SLACK * step, levels)
+	if not fit and not singleOnly and n >= PAIR_MIN_POINTS and evidence >= PAIR_MIN_CHANGES then
+		fit = PairFit(cols, vs, first, last, PAIR_TOL * step, levels)
 	end
 	if fit then
 		fit.n = n
@@ -339,34 +353,29 @@ local function FitWindow(cols, vs, first, last, prefer, step, strict)
 	return fit
 end
 
--- The rounding step of a number as displayed: 1 for "87", 0.1 for "1.5". A total made of
--- rounded ticks ("4 ticks of 9" shown as "36 over 12 sec") only ever lands on multiples of the
--- tick count, so that becomes the step once enough different values agree on it. Two or three
--- values sharing a factor is common for round numbers (a block chance going from 20% to 30%).
+-- Copies the readings listed in keep into fresh columns, so a window can skip a stretch.
+local function Gather(cols, vs, keep)
+	local c, v = {}, {}
+	for _, stat in ipairs(STATS) do
+		local src, dst = cols[stat.key], {}
+		for i, k in ipairs(keep) do
+			dst[i] = src[k]
+		end
+		c[stat.key] = dst
+	end
+	for i, k in ipairs(keep) do
+		v[i] = vs[k]
+	end
+	return c, v
+end
+
+-- The rounding step of a number as displayed: 1 for "87", 0.1 for "1.5". (Forever's tooltips
+-- round totals once; a damage-over-time total isn't built from rounded ticks.)
 local function DisplayStep(vs)
-	local function divides(step)
-		for _, v in ipairs(vs) do
-			if abs(v / step - floor(v / step + 0.5)) > 1e-6 then
-				return false
-			end
-		end
-		return true
-	end
 	local step = 1
-	while step > 0.001 and not divides(step) do
-		step = step / 10
-	end
-	local distinct, count = {}, 0
 	for _, v in ipairs(vs) do
-		if not distinct[v] then
-			distinct[v], count = true, count + 1
-		end
-	end
-	if count >= 4 then
-		for ticks = 8, 2, -1 do
-			if divides(step * ticks) then
-				return step * ticks
-			end
+		while step > 0.001 and abs(v / step - floor(v / step + 0.5)) > 1e-6 do
+			step = step / 10
 		end
 	end
 	return step
@@ -381,8 +390,8 @@ end
 --   { kind = "flat", value, tested = { family = how far it moved } }
 --   { kind = "unknown" }   no stat has moved yet
 -- When something besides stats changes the numbers (a talent, a % damage buff), the readings
--- before that change stop fitting; the history is then cut at a jump in the number, the
--- earliest cut that leaves readings that agree.
+-- stop agreeing. A short stretch that jumped in and back out (a buff that came and went) is
+-- set aside; failing that, only the readings since the change are used.
 function Solver.FitTrack(points, nslots, prefer)
 	local n = #points
 	local cols = {}
@@ -400,32 +409,43 @@ function Solver.FitTrack(points, nslots, prefer)
 			vs[k] = points[k].v[slot]
 		end
 		local step, favour = DisplayStep(vs), prefer and prefer[slot]
-		-- If no formula fits everything, something besides stats changed the number at some
-		-- point, and only readings since then can be used. A change like that shows up as a
-		-- jump, so those are the only places the history may be cut: cutting anywhere else
-		-- would throw away the readings that rule a coincidence out.
-		local starts = { 1 }
+		-- If no formula fits everything, something besides stats changed the number. That
+		-- shows up as a jump, so jumps are the only places readings may be set aside: anywhere
+		-- else would throw away the readings that rule a coincidence out.
+		local jump, starts = {}, {}
 		for k = 2, n do
 			if vs[k] ~= vs[k - 1] then
+				jump[k] = true
 				starts[#starts + 1] = k
 			end
 		end
-		-- An exact fit to a few readings beats a loose fit to more of them: after a change the
-		-- loose bounds could otherwise blend the old formula with the new one.
-		local fit
-		for _, first in ipairs(starts) do
-			if n - first + 1 >= min(STRICT_MIN_POINTS, n) then
-				fit = FitWindow(cols, vs, first, n, favour, step, true)
+		local fit = FitWindow(cols, vs, 1, n, favour, step, false)
+		-- A temporary effect (a buff, an aura) jumps in and back out again: try setting aside
+		-- one such stretch, shortest first, keeping the readings on both sides of it.
+		for length = 1, MAX_STRETCH do
+			for _, from in ipairs(starts) do
+				local to = from + length
 				if fit then
 					break
 				end
+				if to <= n and jump[to] then
+					local keep = {}
+					for k = 1, n do
+						if k < from or k >= to then
+							keep[#keep + 1] = k
+						end
+					end
+					local c, v = Gather(cols, vs, keep)
+					fit = FitWindow(c, v, 1, #keep, favour, step, true, true)
+				end
 			end
 		end
+		-- Otherwise the change was lasting, and only readings since some jump can be used.
 		for _, first in ipairs(starts) do
 			if fit then
 				break
 			end
-			fit = FitWindow(cols, vs, first, n, favour, step, false)
+			fit = FitWindow(cols, vs, first, n, favour, step, true)
 		end
 		fits[slot] = fit or { kind = "unknown" }
 	end
