@@ -35,6 +35,11 @@ Each reading narrows the range further. A stat that doesn't explain the numbers 
 possible coefficients as soon as your gear moves stats in a different proportion, which is how
 the addon tells spell power apart from intellect, healing, and so on.
 
+Many classic spells also gain base damage as you level, until the rank tops out. Your stats
+rise at a level-up too, so SpellScale compares readings taken at the same level, and lets the
+base step up between levels. It also keeps two rules every tooltip follows: numbers grow with
+stats, and a stat can't account for more than the whole number.
+
 The stats it considers: spell power (overall and per school), bonus healing, spell power plus
 a third of bonus healing (Forever's healing-to-damage rule), attack power, ranged attack
 power, main-hand weapon damage, shield block value, strength, agility, stamina, intellect,
@@ -108,6 +113,15 @@ keeps it.
 - Nothing is read in combat, because stats are hidden from addons there.
 - Number parsing assumes an English client (`1,234` and `1.5`).
 
+## Debugging odd results
+
+`tools/replay.lua` runs a character's saved readings back through the solver outside the game,
+showing every reading, which stats moved, and what it concluded:
+
+```
+lua5.1 tools/replay.lua path/to/WTF/Account/<account>/<realm>/<character>/SavedVariables/SpellScale.lua "Seal of Command"
+```
+
 ## Development
 
 ```
@@ -118,6 +132,7 @@ SpellScale/      the addon itself
   Tooltip.lua    tooltip annotations
   UI.lua         the browser window
 tests/           runs the addon against a small fake WoW client
+tools/replay.lua replays saved readings from a real character
 ```
 
 The tests need a Lua 5.1 interpreter, the same Lua version WoW uses:
@@ -129,7 +144,8 @@ lua5.1 tests/test_e2e.lua
 
 `test_e2e.lua` plays a session against the fake client: gear swaps, buffs, a level-up, a
 talent change, combat and a talent tree. It then checks the formulas the addon learned.
-`test_units.lua` covers tooltip-text parsing and runs the solver against 2000 random formulas.
+`test_units.lua` covers tooltip-text parsing, readings from real play that once fooled the
+solver, and 2000 random formulas with gear swaps, level-ups and talents.
 GitHub runs both on every push.
 
 To release, push a version tag (`git tag v0.3.0 && git push --tags`). A GitHub Action

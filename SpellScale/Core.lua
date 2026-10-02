@@ -314,18 +314,56 @@ function ns.FormatNumber(v)
 	return format("%.1f", v)
 end
 
+-- Whether two fits could be the same coefficient on the same stats. One-stat fits carry exact
+-- intervals, which have to overlap.
 local function SameTerms(f1, f2)
 	if f2.kind ~= "linear" or #f1.terms ~= #f2.terms then
 		return false
 	end
-	local slack = f1.err + f2.err + 0.001 -- the two coefficient intervals overlap
 	for i, term in ipairs(f1.terms) do
-		local other = f2.terms[i]
-		if other.key ~= term.key or abs(other.b - term.b) > slack then
+		if f2.terms[i].key ~= term.key then
+			return false
+		end
+	end
+	if f1.lo and f2.lo then
+		return f1.lo <= f2.hi and f2.lo <= f1.hi
+	end
+	local slack = f1.err + f2.err + 0.001
+	for i, term in ipairs(f1.terms) do
+		if abs(f2.terms[i].b - term.b) > slack then
 			return false
 		end
 	end
 	return true
+end
+
+-- Both ends of a "14 to 23" range share one coefficient, so each end's interval narrows the
+-- other's. A rival only survives if it explains both ends.
+local function MergeRange(f1, f2)
+	if not (f1.lo and f2.lo) then
+		return f2.err < f1.err and f2 or f1
+	end
+	local merged = {}
+	for key, value in pairs(f1) do
+		merged[key] = value
+	end
+	local lo, hi = math.max(f1.lo, f2.lo), math.min(f1.hi, f2.hi)
+	merged.lo, merged.hi, merged.err = lo, hi, (hi - lo) / 2
+	merged.terms = { { key = f1.terms[1].key, b = (lo + hi) / 2 } }
+	merged.rivals = nil
+	if f1.rivals and f2.rivals then
+		local inSecond = {}
+		for _, key in ipairs(f2.rivals) do
+			inSecond[key] = true
+		end
+		for _, key in ipairs(f1.rivals) do
+			if inSecond[key] then
+				merged.rivals = merged.rivals or {}
+				merged.rivals[#merged.rivals + 1] = key
+			end
+		end
+	end
+	return merged
 end
 
 -- The scaling numbers of a description, with "14 to 23" ranges merged into one group:
@@ -341,9 +379,7 @@ function ns.Groups(track, template)
 			local last = k
 			if fits[k + 1] and SameTerms(fit, fits[k + 1]) and Parse.IsRangeGap(pieces[k + 1]) then
 				last = k + 1
-				if fits[last].err < fit.err then
-					fit = fits[last]
-				end
+				fit = MergeRange(fit, fits[last])
 			end
 			groups[#groups + 1] = {
 				first = k,
@@ -678,7 +714,8 @@ local function Explain(query)
 		for slot, fit in ipairs(ns.GetFits(track, template)) do
 			local line
 			if fit.kind == "linear" then
-				line = format("base %s + %s  (n=%d%s)", ns.FormatNumber(fit.a), ns.FormatFit(fit), fit.n,
+				line = format("base %s + %s  (n=%d%s%s)", ns.FormatNumber(fit.a), ns.FormatFit(fit), fit.n,
+					fit.levelSteps and ", base rises with level" or "",
 					fit.rivals and ", also fits: " .. concat(fit.rivals, ", ") or "")
 			elseif fit.kind == "flat" then
 				line = "flat at " .. ns.FormatNumber(fit.value)

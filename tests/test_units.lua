@@ -97,21 +97,74 @@ fit = Solver.FitTrack(points({
 T.eq(fit.terms[1].key, "agi", "decimal value scales with agility")
 T.near(fit.terms[1].b, 0.05, 0.004, "decimal coefficient is tight")
 
+T.section("solver: readings from real play")
+-- Real readings only list spell power once; every school matched it on the gear they came from.
+local function real(list)
+	for _, p in ipairs(list) do
+		local t = p[1]
+		for _, school in ipairs({ "holy", "fire", "nature", "frost", "shadow", "arcane" }) do
+			t[school] = t.sp
+		end
+		t.spx = t.sp + (t.heal or 0) / 3
+	end
+	return points(list)
+end
+
+-- A paladin's Holy Shield block chance went from 20% to 30% at the same moment a gear swap
+-- moved spell power, intellect, agility and more. Each of those "explains" the jump on its
+-- own, but the first reading (same spell power, still 20%) rules spell power out, and the
+-- others need negative coefficients or more than the whole number.
+fit = Solver.FitTrack(real({
+	{ { sp = 16, heal = 16, ap = 190, rap = 16, wpn = 109.79, block = 2, str = 67, agi = 35, sta = 77, int = 40, spi = 35 }, { 20 } },
+	{ { sp = 11, heal = 11, ap = 190, rap = 16, wpn = 109.79, block = 2, str = 67, agi = 35, sta = 77, int = 38, spi = 35 }, { 20 } },
+	{ { sp = 6, heal = 6, ap = 190, rap = 16, wpn = 109.79, block = 2, str = 67, agi = 35, sta = 73, int = 38, spi = 35 }, { 20 } },
+	{ { sp = 0, heal = 0, ap = 190, rap = 16, wpn = 109.79, block = 2, str = 67, agi = 35, sta = 73, int = 38, spi = 35 }, { 20 } },
+	{ { sp = 16, heal = 16, ap = 169, rap = 7, wpn = 89.84, block = 2, str = 61, agi = 31, sta = 66, int = 42, spi = 37 }, { 30 } },
+	{ { sp = 16, heal = 16, ap = 165, rap = 3, wpn = 68.64, block = 2, str = 61, agi = 31, sta = 60, int = 42, spi = 43 }, { 30 } },
+	{ { sp = 16, heal = 16, ap = 175, rap = 3, wpn = 70.50, block = 13, str = 66, agi = 31, sta = 60, int = 42, spi = 43 }, { 30 } },
+}), 1)[1]
+T.eq(fit.kind, "flat", "a block chance that jumped with a gear swap isn't pinned on a stat")
+T.eq(fit.value, 30, "it reads as its current value")
+
+-- A shaman's Lightning Bolt (rank 2): spell power matters, and the base also rises a point per
+-- level. Primary stats rise at every level-up too, which once produced "SP + -54% block value".
+fit = Solver.FitTrack(real({
+	{ { sp = 5, ap = 58, wpn = 13.20, block = 3, lvl = 9, str = 30, agi = 23, sta = 29, int = 26, spi = 29 }, { 30 } },
+	{ { sp = 5, ap = 99, wpn = 19.43, block = 3, lvl = 9, str = 26, agi = 23, sta = 29, int = 26, spi = 29 }, { 30 } },
+	{ { sp = 0, ap = 84, wpn = 17.10, block = 4, lvl = 10, str = 42, agi = 23, sta = 30, int = 27, spi = 30 }, { 28 } },
+	{ { sp = 5, ap = 62, wpn = 13.80, block = 3, lvl = 10, str = 31, agi = 19, sta = 30, int = 27, spi = 30 }, { 30 } },
+	{ { sp = 5, ap = 127, wpn = 47.09, block = 1, lvl = 10, str = 39, agi = 23, sta = 28, int = 27, spi = 31 }, { 30 } },
+	{ { sp = 5, ap = 117, wpn = 45.16, block = 1, lvl = 11, str = 33, agi = 24, sta = 31, int = 28, spi = 32 }, { 31 } },
+	{ { sp = 5, ap = 117, wpn = 45.16, block = 1, lvl = 11, str = 33, agi = 24, sta = 29, int = 28, spi = 32 }, { 31 } },
+	{ { sp = 5, ap = 125, wpn = 46.70, block = 1, lvl = 11, str = 37, agi = 24, sta = 31, int = 28, spi = 32 }, { 31 } },
+	{ { sp = 5, ap = 127, wpn = 47.09, block = 1, lvl = 11, str = 38, agi = 24, sta = 31, int = 28, spi = 32 }, { 31 } },
+	{ { sp = 0, ap = 127, wpn = 47.09, block = 1, lvl = 11, str = 38, agi = 24, sta = 31, int = 28, spi = 32 }, { 28 } },
+	{ { sp = 0, ap = 125, wpn = 46.70, block = 1, lvl = 11, str = 37, agi = 24, sta = 31, int = 28, spi = 32 }, { 28 } },
+	{ { sp = 0, ap = 137, wpn = 49.02, block = 1, lvl = 11, str = 43, agi = 24, sta = 31, int = 30, spi = 46 }, { 28 } },
+}), 1)[1]
+T.eq(fit.kind == "linear" and #fit.terms == 1 and fit.terms[1].key, "sp", "Lightning Bolt scales with spell power alone")
+T.ok(fit.levelSteps, "with a base that rises with level")
+T.ok(fit.lo >= 0.3 and fit.hi <= 0.7, string.format("and a sane coefficient (%.2f-%.2f)", fit.lo, fit.hi))
+
 T.section("solver: random formulas")
+-- Each trial invents a spell: base + coefficient * stat, where many classic spells' base also
+-- grows with level up to a cap (as seen on a real shaman). Twelve readings follow random gear
+-- swaps, level-ups (which raise the primary stats and attack power too) and sometimes a talent.
 math.randomseed(1234)
 local KEYS = { "sp", "heal", "ap", "rap", "str", "agi", "sta", "int", "spi" }
+local PRIMARY = { "str", "agi", "sta", "int", "spi" }
 local trials, wrongStat, outside, ambiguousAtEnd, missing = 2000, 0, 0, 0, 0
 for _ = 1, trials do
 	local key = KEYS[math.random(#KEYS)]
 	local b = math.random(5, 150) / 100
 	local a = math.random(5, 300)
-	local ticks = math.random() < 0.3 and math.random(3, 6) or 1
+	local perLevel = math.random() < 0.4 and math.random(1, 4) / 2 or 0
+	local cap = 20 + math.random(0, 4)
 	local nearest = math.random() < 0.5
-	local function rounder(x) -- whole totals, or totals made of rounded ticks
-		x = x / ticks
-		return ticks * (nearest and floor(x + 0.5) or floor(x))
+	local function rounder(x)
+		return nearest and floor(x + 0.5) or floor(x)
 	end
-	local talentAt = math.random() < 0.3 and math.random(2, 9) or nil -- a talent scales the spell midway
+	local talentAt = math.random() < 0.3 and math.random(2, 9) or nil
 	local cur = { sp = 0, heal = 0, ap = 50, rap = 40, str = 30, agi = 25, sta = 30, int = 35, spi = 40, lvl = 20 }
 	local history = {}
 	for step = 1, 12 do
@@ -120,6 +173,12 @@ for _ = 1, trials do
 			-- Core.Record wipes a description's readings when that happens; do the same here.
 			a, b = a * 1.1, b * 1.1
 			history = {}
+		elseif step > 1 and math.random() < 0.25 then
+			cur.lvl = cur.lvl + 1
+			for _, k in ipairs(PRIMARY) do
+				cur[k] = cur[k] + math.random(0, 2)
+			end
+			cur.ap = cur.ap + 2
 		elseif step > 1 then
 			-- a gear swap moves one to three stats by random amounts
 			for _ = 1, math.random(3) do
@@ -133,27 +192,47 @@ for _ = 1, trials do
 		end
 		s.fire, s.holy, s.nature, s.frost, s.shadow, s.arcane = s.sp, s.sp, s.sp, s.sp, s.sp, s.sp
 		s.spx = s.sp + s.heal / 3
-		history[#history + 1] = { s, { rounder(a + b * s[key]) } }
+		local base = a + perLevel * (math.min(s.lvl, cap) - 20)
+		history[#history + 1] = { s, { rounder(base + b * s[key]) } }
 	end
-	local pts = {}
+	local pts, lo, hi = {}, {}, {}
+	local identifiable = false
 	for i, h in ipairs(history) do
 		pts[i] = { s = h[1], v = h[2] }
+		local level, x = h[1].lvl, h[1][key]
+		lo[level], hi[level] = math.min(lo[level] or x, x), math.max(hi[level] or x, x)
+		-- identifiable: between level-ups the stat moved enough to shift the number a whole point
+		identifiable = identifiable or (hi[level] - lo[level]) * b >= 1
 	end
 	fit = Solver.FitTrack(pts, 1)[1]
 	if fit.kind == "linear" then
-		local got = fit.terms[1]
-		if got.key ~= key and not fit.rivals then
-			wrongStat = wrongStat + 1
-		elseif got.key == key and math.abs(got.b - b) > fit.err + 1e-9 then
-			outside = outside + 1
+		local named = {}
+		for _, t in ipairs(fit.terms) do
+			named[t.key] = t
+		end
+		if named[key] then
+			if #fit.terms == 1 and math.abs(named[key].b - b) > fit.err + 1e-9 then
+				outside = outside + 1
+			end
+		elseif not fit.rivals then
+			-- Naming some other stat outright is always wrong. Naming level outright is only
+			-- wrong if the stat visibly moved the number between level-ups.
+			if fit.terms[1].key ~= "lvl" or identifiable then
+				wrongStat = wrongStat + 1
+			end
 		end
 		if fit.rivals then
 			ambiguousAtEnd = ambiguousAtEnd + 1
-			local candidates = { [got.key] = true }
-			for _, rival in ipairs(fit.rivals) do
-				candidates[rival] = true
+			local candidates = {}
+			for _, t in ipairs(fit.terms) do
+				candidates[t.key] = true
 			end
-			if not (candidates[key] or (ns.STAT_BY_KEY[key].family == "sp" and ns.STAT_BY_KEY[got.key].family == "sp")) then
+			for _, rival in ipairs(fit.rivals) do
+				for part in rival:gmatch("[^+]+") do
+					candidates[part] = true
+				end
+			end
+			if identifiable and not candidates[key] then
 				missing = missing + 1
 			end
 		end
@@ -161,7 +240,7 @@ for _ = 1, trials do
 end
 T.eq(wrongStat, 0, "never confidently names the wrong stat")
 T.eq(outside, 0, "the true coefficient is always inside the reported uncertainty")
-T.eq(missing, 0, "when unsure, the true stat is among the candidates")
+T.eq(missing, 0, "when unsure and the data could show it, the true stat is among the candidates")
 print(format("    %d of %d still ambiguous at the end", ambiguousAtEnd, trials))
 
 T.done()

@@ -103,6 +103,9 @@ local function GroupLine(track, template, group)
 	local fit = group.fit
 	local text = format("|cffffffff%s|r %s  |cff808080=|r %s + %s%s|r", now, group.context, base,
 		fit.rivals and "|cffd9b860" or "|cff7fc8ff", ns.FormatFit(fit))
+	if fit.levelSteps then
+		text = text .. " |cff808080(base rises with level)|r"
+	end
 	if fit.rivals then
 		text = text .. "\n|cff808080" .. RivalText(fit.rivals) .. ": swap gear that changes only one|r"
 	end
